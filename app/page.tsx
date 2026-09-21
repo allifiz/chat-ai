@@ -135,6 +135,72 @@ function buildApiContent(message: Message) {
   return parts.join("\n\n");
 }
 
+
+function codeLanguageFromFilename(filename: string) {
+  const extension = filename.split(".").pop()?.toLowerCase() ?? "";
+
+  const languageMap: Record<string, string> = {
+    js: "javascript",
+    jsx: "jsx",
+    ts: "typescript",
+    tsx: "tsx",
+    json: "json",
+    sql: "sql",
+    py: "python",
+    go: "go",
+    cs: "csharp",
+    php: "php",
+    html: "html",
+    css: "css",
+    md: "markdown",
+    sh: "bash",
+    bash: "bash",
+    yml: "yaml",
+    yaml: "yaml",
+    xml: "xml",
+  };
+
+  return languageMap[extension] ?? extension ?? "text";
+}
+
+function normalizeAssistantContent(content: string) {
+  if (!content) return content;
+
+  const fence = String.fromCharCode(96).repeat(3);
+
+  let normalized = content.replace(
+    /<write_to_file>\s*<path>\s*([\s\S]*?)\s*<\/path>\s*<content>\s*([\s\S]*?)\s*<\/content>\s*<\/write_to_file>/gi,
+    (_match, rawPath: string, rawContent: string) => {
+      const filename = rawPath.trim();
+      const language = codeLanguageFromFilename(filename);
+      const code = rawContent.trim();
+
+      return (
+        "File " +
+        String.fromCharCode(96) +
+        filename +
+        String.fromCharCode(96) +
+        ":\n\n" +
+        fence +
+        language +
+        "\n" +
+        code +
+        "\n" +
+        fence
+      );
+    },
+  );
+
+  normalized = normalized
+    .replace(/<\/?write_to_file>/gi, "")
+    .replace(/<\/?path>/gi, "")
+    .replace(/<\/?content>/gi, "")
+    .replace(/<\/?tool_call[^>]*>/gi, "")
+    .trim();
+
+  return normalized;
+}
+
 export default function Home() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -577,6 +643,19 @@ export default function Home() {
               : message,
           ),
         }));
+      } else {
+        const normalizedContent = normalizeAssistantContent(accumulated);
+
+        if (normalizedContent !== accumulated) {
+          updateChat(chat.id, (current) => ({
+            ...current,
+            messages: current.messages.map((message) =>
+              message.id === assistantMessage.id
+                ? { ...message, content: normalizedContent }
+                : message,
+            ),
+          }));
+        }
       }
     } catch (requestError) {
       if (
@@ -826,14 +905,37 @@ export default function Home() {
 
                       {message.content ? (
                         message.role === "assistant" ? (
-                          <>
-                            <MarkdownMessage content={message.content} />
-                            {!isLastStreamingAssistant ? (
-                              <AssistantMessageActions
-                                content={message.content}
+                          /<write_to_file>|<content>|<path>/i.test(
+                            message.content,
+                          ) &&
+                          !/<\/write_to_file>/i.test(message.content) &&
+                          isLastStreamingAssistant ? (
+                            <div
+                              className="typing"
+                              aria-label="AI sedang menyiapkan kode"
+                            >
+                              <span />
+                              <span />
+                              <span />
+                            </div>
+                          ) : (
+                            <>
+                              <MarkdownMessage
+                                content={
+                                  isLastStreamingAssistant
+                                    ? message.content
+                                    : normalizeAssistantContent(message.content)
+                                }
                               />
-                            ) : null}
-                          </>
+                              {!isLastStreamingAssistant ? (
+                                <AssistantMessageActions
+                                  content={normalizeAssistantContent(
+                                    message.content,
+                                  )}
+                                />
+                              ) : null}
+                            </>
+                          )
                         ) : (
                           <div className="user-message-text">
                             {message.content}
