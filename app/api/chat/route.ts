@@ -28,13 +28,12 @@ export async function POST(request: Request) {
     /\/$/,
     "",
   );
-  const model = process.env.ROUTER_MODEL;
 
-  if (!apiKey || !model) {
+  if (!apiKey) {
     return NextResponse.json(
       {
         error:
-          "Server belum dikonfigurasi. Isi ROUTER_API_KEY dan ROUTER_MODEL di .env.local.",
+          "Server belum dikonfigurasi. Isi ROUTER_API_KEY di .env.local.",
       },
       { status: 500 },
     );
@@ -51,10 +50,22 @@ export async function POST(request: Request) {
     );
   }
 
-  const messages =
+  const record =
     body && typeof body === "object"
-      ? (body as Record<string, unknown>).messages
-      : undefined;
+      ? (body as Record<string, unknown>)
+      : null;
+
+  const messages = record?.messages;
+  const requestedModel =
+    typeof record?.model === "string" ? record.model.trim() : "";
+  const model = requestedModel || process.env.ROUTER_MODEL?.trim();
+
+  if (!model || model.length > 200) {
+    return NextResponse.json(
+      { error: "Pilih model 9Router yang valid sebelum mengirim pesan." },
+      { status: 400 },
+    );
+  }
 
   if (
     !Array.isArray(messages) ||
