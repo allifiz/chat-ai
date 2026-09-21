@@ -18,7 +18,7 @@ function isValidMessage(value: unknown): value is ChatMessage {
       message.role === "assistant") &&
     typeof message.content === "string" &&
     message.content.length > 0 &&
-    message.content.length <= 50_000
+    message.content.length <= 550_000
   );
 }
 
