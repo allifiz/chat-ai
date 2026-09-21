@@ -875,8 +875,8 @@ export default function Home() {
                             </>
                           )
                         ) : (
-                          <div className="user-message-text">
-                            {message.content}
+                          <div className="user-message-markdown">
+                            <MarkdownMessage content={message.content} />
                           </div>
                         )
                       ) : (
