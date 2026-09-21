@@ -654,3 +654,47 @@ textarea:focus-visible {
     font-size: 14px;
   }
 }
+
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-select {
+  max-width: 250px;
+  height: 34px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-soft);
+  color: #d7d7db;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.model-select:hover:not(:disabled) {
+  background: var(--panel-hover);
+}
+
+.model-select:disabled {
+  color: #777a7f;
+  cursor: not-allowed;
+}
+
+@media (max-width: 680px) {
+  .model-select {
+    max-width: 145px;
+  }
+}
+
+@media (max-width: 440px) {
+  .model-select {
+    max-width: 118px;
+  }
+
+  .topbar-new {
+    display: none;
+  }
+}
