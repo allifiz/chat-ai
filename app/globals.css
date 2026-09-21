@@ -490,7 +490,7 @@ textarea:focus-visible {
 
 .composer textarea {
   min-height: 34px;
-  max-height: 180px;
+  max-height: min(360px, 48vh);
   flex: 1;
   resize: none;
   border: 0;
@@ -1041,4 +1041,14 @@ textarea:focus-visible {
   .attachment-chip {
     min-width: min(100%, 210px);
   }
+}
+
+
+.user-message-markdown .markdown-body {
+  color: #e7e7e9;
+}
+
+.user-message-markdown .code-block-shell {
+  margin-top: 10px;
+  margin-bottom: 10px;
 }
