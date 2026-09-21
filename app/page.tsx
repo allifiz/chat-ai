@@ -10,6 +10,7 @@ import {
 } from "react";
 
 const STORAGE_KEY = "chat-ai-conversations-v1";
+const MODEL_STORAGE_KEY = "chat-ai-model-v1";
 
 type Role = "user" | "assistant";
 
@@ -59,6 +60,9 @@ export default function Home() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -99,6 +103,73 @@ export default function Home() {
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
   }, [chats, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    let cancelled = false;
+
+    async function loadModels() {
+      setModelsLoading(true);
+
+      try {
+        const response = await fetch("/api/models", { cache: "no-store" });
+        const raw = await response.text();
+
+        let payload: { data?: string[]; defaultModel?: string | null; error?: string } = {};
+
+        try {
+          payload = JSON.parse(raw) as typeof payload;
+        } catch {
+          // Response bukan JSON.
+        }
+
+        if (!response.ok) {
+          throw new Error(payload.error || raw || "Gagal mengambil daftar model.");
+        }
+
+        const availableModels = Array.isArray(payload.data) ? payload.data : [];
+
+        if (cancelled) return;
+
+        setModels(availableModels);
+
+        const savedModel = localStorage.getItem(MODEL_STORAGE_KEY);
+        const preferredModel =
+          savedModel && availableModels.includes(savedModel)
+            ? savedModel
+            : payload.defaultModel && availableModels.includes(payload.defaultModel)
+              ? payload.defaultModel
+              : availableModels[0] ?? payload.defaultModel ?? "";
+
+        setSelectedModel(preferredModel);
+      } catch (modelError) {
+        if (cancelled) return;
+
+        setError(
+          modelError instanceof Error
+            ? modelError.message
+            : "Gagal mengambil daftar model.",
+        );
+      } finally {
+        if (!cancelled) {
+          setModelsLoading(false);
+        }
+      }
+    }
+
+    void loadModels();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated]);
+
+  useEffect(() => {
+    if (!hydrated || !selectedModel) return;
+
+    localStorage.setItem(MODEL_STORAGE_KEY, selectedModel);
+  }, [hydrated, selectedModel]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -172,6 +243,11 @@ export default function Home() {
 
     if (!content || !chat || isStreaming) return;
 
+    if (!selectedModel) {
+      setError("Pilih model 9Router dulu.");
+      return;
+    }
+
     const userMessage: Message = {
       id: createId(),
       role: "user",
@@ -214,7 +290,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ messages: messagesForApi }),
+        body: JSON.stringify({ messages: messagesForApi, model: selectedModel }),
         signal: controller.signal,
       });
 
@@ -455,9 +531,34 @@ export default function Home() {
             <span>Powered by 9Router</span>
           </div>
 
-          <button className="topbar-new" type="button" onClick={handleNewChat}>
-            + <span>Chat baru</span>
-          </button>
+          <div className="topbar-actions">
+            <select
+              className="model-select"
+              value={selectedModel}
+              disabled={modelsLoading || models.length === 0}
+              aria-label="Pilih model AI"
+              onChange={(event) => {
+                setSelectedModel(event.target.value);
+                setError("");
+              }}
+            >
+              {modelsLoading ? (
+                <option value="">Memuat model…</option>
+              ) : models.length === 0 ? (
+                <option value="">Model tidak tersedia</option>
+              ) : (
+                models.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))
+              )}
+            </select>
+
+            <button className="topbar-new" type="button" onClick={handleNewChat}>
+              + <span>Chat baru</span>
+            </button>
+          </div>
         </header>
 
         <div className="messages">
@@ -552,7 +653,7 @@ export default function Home() {
                 className="send-button"
                 type="submit"
                 aria-label="Kirim pesan"
-                disabled={!input.trim()}
+                disabled={!input.trim() || !selectedModel || modelsLoading}
               >
                 ↑
               </button>
