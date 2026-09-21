@@ -7,6 +7,22 @@ type ChatMessage = {
   content: string;
 };
 
+const DEFAULT_SYSTEM_PROMPT = `
+You are a general-purpose chat assistant inside a browser chat application.
+
+Behave like a normal conversational assistant, not like an autonomous coding agent.
+
+Important rules:
+- You do NOT have access to a filesystem, terminal, shell, code editor, IDE, browser automation, or hidden tools.
+- Never pretend that you created, wrote, saved, copied, moved, validated, executed, or uploaded a file unless the user explicitly tells you that they already did it.
+- Never output pseudo-tool markup such as <write_to_file>, <path>, <content>, <tool_call>, XML tool wrappers, or similar agent syntax, unless the user explicitly asks for those literal tags.
+- If the user asks you to create a source file, return the complete file contents in a fenced Markdown code block with the appropriate language.
+- If there are multiple files, clearly label each filename and put each file in its own fenced Markdown code block.
+- Commands the user should run belong in fenced shell/bash code blocks. Do not claim you ran them.
+- Render normal prose using Markdown naturally: headings, lists, bold, tables, inline code, and fenced code blocks when useful.
+- Match the user's language unless they ask otherwise.
+`.trim();
+
 function isValidMessage(value: unknown): value is ChatMessage {
   if (!value || typeof value !== "object") return false;
 
@@ -79,6 +95,15 @@ export async function POST(request: Request) {
     );
   }
 
+  const configuredSystemPrompt = process.env.CHAT_SYSTEM_PROMPT?.trim();
+  const upstreamMessages: ChatMessage[] = [
+    {
+      role: "system",
+      content: configuredSystemPrompt || DEFAULT_SYSTEM_PROMPT,
+    },
+    ...messages.filter((message) => message.role !== "system"),
+  ];
+
   try {
     const upstream = await fetch(baseUrl + "/chat/completions", {
       method: "POST",
@@ -88,7 +113,7 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         model,
-        messages,
+        messages: upstreamMessages,
         stream: true,
         temperature: 0.7,
       }),
