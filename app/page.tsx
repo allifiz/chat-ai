@@ -2,7 +2,6 @@
 
 import {
   type ChangeEvent,
-  type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
   useEffect,
@@ -18,8 +17,6 @@ const STORAGE_KEY = "chat-ai-conversations-v2";
 const MODEL_STORAGE_KEY = "chat-ai-model-v1";
 const MAX_ATTACHMENTS = 4;
 const MAX_ATTACHMENT_BYTES = 120_000;
-const LONG_PASTE_CHARS = 1_200;
-const LONG_PASTE_LINES = 14;
 
 type Role = "user" | "assistant";
 
@@ -72,46 +69,6 @@ function titleFromMessage(content: string, attachments: Attachment[]) {
   if (compact.length <= 38) return compact;
 
   return compact.slice(0, 38) + "…";
-}
-
-function inferPasteExtension(content: string) {
-  const trimmed = content.trim();
-
-  try {
-    JSON.parse(trimmed);
-    return "json";
-  } catch {
-    // Bukan JSON.
-  }
-
-  if (/^\s*(SELECT|WITH|INSERT|UPDATE|DELETE|CREATE|ALTER)\b/im.test(content)) {
-    return "sql";
-  }
-
-  if (/\b(package main|func\s+\w+\s*\()/m.test(content)) {
-    return "go";
-  }
-
-  if (/\b(def\s+\w+\s*\(|from\s+\S+\s+import|print\s*\()/m.test(content)) {
-    return "py";
-  }
-
-  if (
-    /\b(interface|type|const|let|function|import|export)\b/.test(content) ||
-    /=>/.test(content)
-  ) {
-    return "ts";
-  }
-
-  if (/\b(namespace|public class|private |protected |using System)/.test(content)) {
-    return "cs";
-  }
-
-  if (/<[a-z][\s\S]*>/i.test(content)) {
-    return "html";
-  }
-
-  return "txt";
 }
 
 function buildApiContent(message: Message) {
@@ -357,7 +314,7 @@ export default function Home() {
     if (!textarea) return;
 
     textarea.style.height = "auto";
-    textarea.style.height = Math.min(textarea.scrollHeight, 180) + "px";
+    textarea.style.height = Math.min(textarea.scrollHeight, 360) + "px";
   }
 
   function handleNewChat() {
@@ -418,13 +375,8 @@ export default function Home() {
         return current;
       }
 
-      const extension = inferPasteExtension(content);
       const fileName =
-        name ??
-        "pasted-" +
-          String(current.length + 1).padStart(2, "0") +
-          "." +
-          extension;
+        name ?? "attachment-" + String(current.length + 1).padStart(2, "0") + ".txt";
 
       return [
         ...current,
@@ -458,31 +410,6 @@ export default function Home() {
       } catch {
         setError("Gagal membaca " + file.name + " sebagai file teks.");
       }
-    }
-  }
-
-  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const pastedFiles = Array.from(event.clipboardData.files);
-
-    if (pastedFiles.length > 0) {
-      event.preventDefault();
-      void addFiles(pastedFiles);
-      return;
-    }
-
-    const text = event.clipboardData.getData("text/plain");
-    const lineCount = text.split(/\r?\n/).length;
-
-    if (
-      text.length >= LONG_PASTE_CHARS ||
-      lineCount >= LONG_PASTE_LINES
-    ) {
-      event.preventDefault();
-      addTextAttachment(text);
-
-      requestAnimationFrame(() => {
-        textareaRef.current?.focus();
-      });
     }
   }
 
@@ -693,10 +620,21 @@ export default function Home() {
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void handleSubmit();
+    if (event.key !== "Enter" || event.shiftKey) return;
+
+    const textarea = event.currentTarget;
+    const cursorPosition = textarea.selectionStart;
+    const beforeCursor = textarea.value.slice(0, cursorPosition);
+    const fenceCount = beforeCursor.split("```").length - 1;
+    const isInsideCodeFence = fenceCount % 2 === 1;
+
+    if (isInsideCodeFence) {
+      requestAnimationFrame(resizeComposer);
+      return;
     }
+
+    event.preventDefault();
+    void handleSubmit();
   }
 
   function stopStreaming() {
@@ -1005,14 +943,13 @@ export default function Home() {
                 ref={textareaRef}
                 value={input}
                 rows={1}
-                placeholder="Ketik pesan atau paste source code…"
+                placeholder="Ketik pesan, paste source code, atau gunakan ```code```…"
                 aria-label="Pesan"
                 disabled={isStreaming}
                 onChange={(event) => {
                   setInput(event.target.value);
                   resizeComposer();
                 }}
-                onPaste={handlePaste}
                 onKeyDown={handleKeyDown}
               />
 
@@ -1043,8 +980,8 @@ export default function Home() {
           </div>
 
           <p className="composer-note">
-            Paste panjang otomatis jadi attachment. Enter kirim, Shift + Enter
-            baris baru.
+            Markdown dan ```code block``` didukung. Enter kirim, Shift + Enter
+            baris baru. Saat berada di dalam code block, Enter membuat baris baru.
           </p>
         </div>
       </section>
