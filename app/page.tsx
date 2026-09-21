@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  type ChangeEvent,
+  type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
   useEffect,
@@ -8,16 +10,32 @@ import {
   useRef,
   useState,
 } from "react";
+import { AssistantMessageActions } from "@/components/AssistantMessageActions";
+import { AttachmentChip } from "@/components/AttachmentChip";
+import { MarkdownMessage } from "@/components/MarkdownMessage";
 
-const STORAGE_KEY = "chat-ai-conversations-v1";
+const STORAGE_KEY = "chat-ai-conversations-v2";
 const MODEL_STORAGE_KEY = "chat-ai-model-v1";
+const MAX_ATTACHMENTS = 4;
+const MAX_ATTACHMENT_BYTES = 120_000;
+const LONG_PASTE_CHARS = 1_200;
+const LONG_PASTE_LINES = 14;
 
 type Role = "user" | "assistant";
+
+type Attachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  content: string;
+};
 
 type Message = {
   id: string;
   role: Role;
   content: string;
+  attachments?: Attachment[];
 };
 
 type Chat = {
@@ -44,18 +62,84 @@ function createChat(): Chat {
   };
 }
 
-function titleFromMessage(content: string) {
+function titleFromMessage(content: string, attachments: Attachment[]) {
   const compact = content.replace(/\s+/g, " ").trim();
+
+  if (!compact) {
+    return attachments[0]?.name ?? "Chat baru";
+  }
 
   if (compact.length <= 38) return compact;
 
   return compact.slice(0, 38) + "…";
 }
 
+function inferPasteExtension(content: string) {
+  const trimmed = content.trim();
+
+  try {
+    JSON.parse(trimmed);
+    return "json";
+  } catch {
+    // Bukan JSON.
+  }
+
+  if (/^\s*(SELECT|WITH|INSERT|UPDATE|DELETE|CREATE|ALTER)\b/im.test(content)) {
+    return "sql";
+  }
+
+  if (/\b(package main|func\s+\w+\s*\()/m.test(content)) {
+    return "go";
+  }
+
+  if (/\b(def\s+\w+\s*\(|from\s+\S+\s+import|print\s*\()/m.test(content)) {
+    return "py";
+  }
+
+  if (
+    /\b(interface|type|const|let|function|import|export)\b/.test(content) ||
+    /=>/.test(content)
+  ) {
+    return "ts";
+  }
+
+  if (/\b(namespace|public class|private |protected |using System)/.test(content)) {
+    return "cs";
+  }
+
+  if (/<[a-z][\s\S]*>/i.test(content)) {
+    return "html";
+  }
+
+  return "txt";
+}
+
+function buildApiContent(message: Message) {
+  const parts: string[] = [];
+
+  if (message.content.trim()) {
+    parts.push(message.content.trim());
+  }
+
+  for (const attachment of message.attachments ?? []) {
+    const safeName = attachment.name.replace(/"/g, "'");
+    parts.push(
+      [
+        '<file name="' + safeName + '" type="' + attachment.mimeType + '">',
+        attachment.content,
+        "</file>",
+      ].join("\n"),
+    );
+  }
+
+  return parts.join("\n\n");
+}
+
 export default function Home() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState("");
@@ -66,6 +150,7 @@ export default function Home() {
 
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const activeChat = useMemo(
@@ -75,7 +160,9 @@ export default function Home() {
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored =
+        localStorage.getItem(STORAGE_KEY) ??
+        localStorage.getItem("chat-ai-conversations-v1");
 
       if (stored) {
         const parsed = JSON.parse(stored) as unknown;
@@ -101,7 +188,13 @@ export default function Home() {
   useEffect(() => {
     if (!hydrated) return;
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
+    } catch {
+      setError(
+        "Riwayat browser sudah terlalu besar. Hapus beberapa chat atau attachment lama.",
+      );
+    }
   }, [chats, hydrated]);
 
   useEffect(() => {
@@ -116,7 +209,11 @@ export default function Home() {
         const response = await fetch("/api/models", { cache: "no-store" });
         const raw = await response.text();
 
-        let payload: { data?: string[]; defaultModel?: string | null; error?: string } = {};
+        let payload: {
+          data?: string[];
+          defaultModel?: string | null;
+          error?: string;
+        } = {};
 
         try {
           payload = JSON.parse(raw) as typeof payload;
@@ -125,7 +222,9 @@ export default function Home() {
         }
 
         if (!response.ok) {
-          throw new Error(payload.error || raw || "Gagal mengambil daftar model.");
+          throw new Error(
+            payload.error || raw || "Gagal mengambil daftar model.",
+          );
         }
 
         const availableModels = Array.isArray(payload.data) ? payload.data : [];
@@ -138,7 +237,8 @@ export default function Home() {
         const preferredModel =
           savedModel && availableModels.includes(savedModel)
             ? savedModel
-            : payload.defaultModel && availableModels.includes(payload.defaultModel)
+            : payload.defaultModel &&
+                availableModels.includes(payload.defaultModel)
               ? payload.defaultModel
               : availableModels[0] ?? payload.defaultModel ?? "";
 
@@ -204,6 +304,7 @@ export default function Home() {
     setChats((current) => [nextChat, ...current]);
     setActiveChatId(nextChat.id);
     setInput("");
+    setPendingAttachments([]);
     setError("");
     setSidebarOpen(false);
 
@@ -235,13 +336,108 @@ export default function Home() {
     });
   }
 
+  function addTextAttachment(content: string, name?: string, mimeType = "text/plain") {
+    const size = new TextEncoder().encode(content).length;
+
+    if (size > MAX_ATTACHMENT_BYTES) {
+      setError(
+        "Attachment terlalu besar. Maksimal sekitar 120 KB per file agar history browser dan token API tidak meledak.",
+      );
+      return;
+    }
+
+    setPendingAttachments((current) => {
+      if (current.length >= MAX_ATTACHMENTS) {
+        setError("Maksimal 4 attachment per pesan.");
+        return current;
+      }
+
+      const extension = inferPasteExtension(content);
+      const fileName =
+        name ??
+        "pasted-" +
+          String(current.length + 1).padStart(2, "0") +
+          "." +
+          extension;
+
+      return [
+        ...current,
+        {
+          id: createId(),
+          name: fileName,
+          mimeType,
+          size,
+          content,
+        },
+      ];
+    });
+
+    setError("");
+  }
+
+  async function addFiles(files: File[]) {
+    for (const file of files) {
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setError(file.name + " terlalu besar. Maksimal sekitar 120 KB.");
+        continue;
+      }
+
+      try {
+        const content = await file.text();
+        addTextAttachment(
+          content,
+          file.name,
+          file.type || "text/plain",
+        );
+      } catch {
+        setError("Gagal membaca " + file.name + " sebagai file teks.");
+      }
+    }
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const pastedFiles = Array.from(event.clipboardData.files);
+
+    if (pastedFiles.length > 0) {
+      event.preventDefault();
+      void addFiles(pastedFiles);
+      return;
+    }
+
+    const text = event.clipboardData.getData("text/plain");
+    const lineCount = text.split(/\r?\n/).length;
+
+    if (
+      text.length >= LONG_PASTE_CHARS ||
+      lineCount >= LONG_PASTE_LINES
+    ) {
+      event.preventDefault();
+      addTextAttachment(text);
+
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+      });
+    }
+  }
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+
+    if (files.length > 0) {
+      void addFiles(files);
+    }
+
+    event.target.value = "";
+  }
+
   async function handleSubmit(event?: FormEvent) {
     event?.preventDefault();
 
     const content = input.trim();
     const chat = activeChat;
+    const attachments = pendingAttachments;
 
-    if (!content || !chat || isStreaming) return;
+    if ((!content && attachments.length === 0) || !chat || isStreaming) return;
 
     if (!selectedModel) {
       setError("Pilih model 9Router dulu.");
@@ -252,6 +448,7 @@ export default function Home() {
       id: createId(),
       role: "user",
       content,
+      attachments,
     };
 
     const assistantMessage: Message = {
@@ -262,19 +459,20 @@ export default function Home() {
 
     const messagesForApi = [...chat.messages, userMessage].map((message) => ({
       role: message.role,
-      content: message.content,
+      content: buildApiContent(message),
     }));
 
     updateChat(chat.id, (current) => ({
       ...current,
       title:
         current.messages.length === 0
-          ? titleFromMessage(content)
+          ? titleFromMessage(content, attachments)
           : current.title,
       messages: [...current.messages, userMessage, assistantMessage],
     }));
 
     setInput("");
+    setPendingAttachments([]);
     setError("");
     setIsStreaming(true);
     resetComposerHeight();
@@ -290,7 +488,10 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ messages: messagesForApi, model: selectedModel }),
+        body: JSON.stringify({
+          messages: messagesForApi,
+          model: selectedModel,
+        }),
         signal: controller.signal,
       });
 
@@ -567,8 +768,8 @@ export default function Home() {
               <div className="hero-mark">AI</div>
               <h1>Apa yang mau kita kerjain?</h1>
               <p>
-                Tanya apa saja. Jawaban akan di-stream dari model yang kamu
-                pasang di 9Router.
+                Markdown, code block, tabel, attachment teks, dan streaming
+                response sekarang sudah dirender seperti chat AI modern.
               </p>
 
               <div className="suggestions">
@@ -590,32 +791,68 @@ export default function Home() {
             </section>
           ) : (
             <div className="message-list">
-              {activeChat.messages.map((message) => (
-                <article
-                  className={"message " + message.role}
-                  key={message.id}
-                >
-                  <div className="avatar">
-                    {message.role === "user" ? "U" : "AI"}
-                  </div>
+              {activeChat.messages.map((message, index) => {
+                const isLastStreamingAssistant =
+                  isStreaming &&
+                  index === activeChat.messages.length - 1 &&
+                  message.role === "assistant";
 
-                  <div className="message-content">
-                    <div className="message-author">
-                      {message.role === "user" ? "Kamu" : "Chat AI"}
+                return (
+                  <article
+                    className={"message " + message.role}
+                    key={message.id}
+                  >
+                    <div className="avatar">
+                      {message.role === "user" ? "U" : "AI"}
                     </div>
 
-                    {message.content ? (
-                      <div className="message-text">{message.content}</div>
-                    ) : (
-                      <div className="typing" aria-label="AI sedang menjawab">
-                        <span />
-                        <span />
-                        <span />
+                    <div className="message-content">
+                      <div className="message-author">
+                        {message.role === "user" ? "Kamu" : "Chat AI"}
                       </div>
-                    )}
-                  </div>
-                </article>
-              ))}
+
+                      {message.attachments?.length ? (
+                        <div className="message-attachments">
+                          {message.attachments.map((attachment) => (
+                            <AttachmentChip
+                              key={attachment.id}
+                              name={attachment.name}
+                              size={attachment.size}
+                              compact
+                            />
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {message.content ? (
+                        message.role === "assistant" ? (
+                          <>
+                            <MarkdownMessage content={message.content} />
+                            {!isLastStreamingAssistant ? (
+                              <AssistantMessageActions
+                                content={message.content}
+                              />
+                            ) : null}
+                          </>
+                        ) : (
+                          <div className="user-message-text">
+                            {message.content}
+                          </div>
+                        )
+                      ) : (
+                        <div
+                          className="typing"
+                          aria-label="AI sedang menjawab"
+                        >
+                          <span />
+                          <span />
+                          <span />
+                        </div>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
               <div ref={bottomRef} />
             </div>
           )}
@@ -624,45 +861,88 @@ export default function Home() {
         <div className="composer-area">
           {error ? <div className="error-banner">{error}</div> : null}
 
-          <form className="composer" onSubmit={handleSubmit}>
-            <textarea
-              ref={textareaRef}
-              value={input}
-              rows={1}
-              placeholder="Ketik pesan…"
-              aria-label="Pesan"
-              disabled={isStreaming}
-              onChange={(event) => {
-                setInput(event.target.value);
-                resizeComposer();
-              }}
-              onKeyDown={handleKeyDown}
-            />
+          <div className="composer-box">
+            {pendingAttachments.length > 0 ? (
+              <div className="pending-attachments">
+                {pendingAttachments.map((attachment) => (
+                  <AttachmentChip
+                    key={attachment.id}
+                    name={attachment.name}
+                    size={attachment.size}
+                    onRemove={() =>
+                      setPendingAttachments((current) =>
+                        current.filter((item) => item.id !== attachment.id),
+                      )
+                    }
+                  />
+                ))}
+              </div>
+            ) : null}
 
-            {isStreaming ? (
+            <form className="composer" onSubmit={handleSubmit}>
+              <input
+                ref={fileInputRef}
+                className="hidden-file-input"
+                type="file"
+                multiple
+                accept=".txt,.md,.json,.js,.jsx,.ts,.tsx,.sql,.py,.go,.cs,.php,.html,.css,.xml,.yaml,.yml,.env,.log,text/*,application/json"
+                onChange={handleFileChange}
+              />
+
               <button
-                className="send-button stop"
+                className="attach-button"
                 type="button"
-                aria-label="Hentikan jawaban"
-                onClick={stopStreaming}
+                aria-label="Lampirkan file teks"
+                disabled={isStreaming}
+                onClick={() => fileInputRef.current?.click()}
               >
-                ■
+                +
               </button>
-            ) : (
-              <button
-                className="send-button"
-                type="submit"
-                aria-label="Kirim pesan"
-                disabled={!input.trim() || !selectedModel || modelsLoading}
-              >
-                ↑
-              </button>
-            )}
-          </form>
+
+              <textarea
+                ref={textareaRef}
+                value={input}
+                rows={1}
+                placeholder="Ketik pesan atau paste source code…"
+                aria-label="Pesan"
+                disabled={isStreaming}
+                onChange={(event) => {
+                  setInput(event.target.value);
+                  resizeComposer();
+                }}
+                onPaste={handlePaste}
+                onKeyDown={handleKeyDown}
+              />
+
+              {isStreaming ? (
+                <button
+                  className="send-button stop"
+                  type="button"
+                  aria-label="Hentikan jawaban"
+                  onClick={stopStreaming}
+                >
+                  ■
+                </button>
+              ) : (
+                <button
+                  className="send-button"
+                  type="submit"
+                  aria-label="Kirim pesan"
+                  disabled={
+                    (!input.trim() && pendingAttachments.length === 0) ||
+                    !selectedModel ||
+                    modelsLoading
+                  }
+                >
+                  ↑
+                </button>
+              )}
+            </form>
+          </div>
 
           <p className="composer-note">
-            Enter untuk kirim, Shift + Enter untuk baris baru. Riwayat tersimpan
-            lokal di browser.
+            Paste panjang otomatis jadi attachment. Enter kirim, Shift + Enter
+            baris baru.
           </p>
         </div>
       </section>
