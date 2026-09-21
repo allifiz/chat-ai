@@ -6,6 +6,8 @@ ChatGPT-style web chat sederhana yang memakai [9Router](https://9router.com/) se
 
 - UI chat responsif ala ChatGPT
 - Streaming response
+- Daftar model otomatis dari endpoint 9Router `/v1/models`
+- Pilihan model tersimpan di browser
 - Riwayat percakapan di \`localStorage\`
 - New chat dan hapus chat
 - Stop generation
@@ -36,7 +38,8 @@ Isi \`.env.local\`:
 \`\`\`env
 ROUTER_API_KEY=API_KEY_KAMU
 ROUTER_BASE_URL=https://9router.com/v1
-ROUTER_MODEL=MODEL_ID_KAMU
+# Opsional. Bisa dibiarkan kosong dan pilih model dari dropdown aplikasi.
+ROUTER_MODEL=
 \`\`\`
 
 Jangan commit \`.env.local\`. File tersebut sudah masuk \`.gitignore\`.
